@@ -6,6 +6,51 @@ import pandas as pd
 from pandas import DataFrame, Series
 from scipy.spatial import cKDTree
 
+__all__ = ['msd', 'imsd', 'emsd', 'compute_drift', 'subtract_drift',
+           'proximity', 'vanhove', 'relate_frames', 'velocity_corr',
+           'direction_corr', 'is_typical', 'diagonal_size']
+
+
+try:
+    import scikits.bootstrap as btstr
+except:
+    btstr = None
+
+
+def _N_msd_gaps(N, t, gaps):
+    # expanded from Elson et al., Biophys. J. 60, 1991, 910-21
+    k = N - t
+    fails = np.logical_or(gaps[:-t], gaps[t:])
+    Nfails = fails.sum()
+    if Nfails == k:
+        return 0
+    # construct covariance matrix of size kxk
+    cov = np.sum(
+        [np.tri(k, k=-i, dtype=np.float)*-1 for i in range(1, int(min(k, t+1)))]
+        ,axis=0) + np.tri(k, k=-1, dtype=np.float)*t
+    # remove failed
+    cov[:,fails] = cov[fails] = 0
+    # calculate effective number of measurements
+    return (k-Nfails)**2/((np.sum(cov**2)*2/t**2+(k-Nfails)))
+
+def _N_msd_nogaps(N, t):
+    # from Elson et al., Biophys. J. 60, 1991, 910-21
+    if t <= N/2.:
+        return 6*(N-t)**2*t/(2*N-t+4*N*t**2-5*t**3)
+    else:
+        return 1/(1+((N-t)**3+5*t-4*(N-t)**2*t-N)/(6*(N-t)*t**2))
+    
+def _N_msd(N, t, gaps = None):
+    # N is number of positions (number of steps + 1)
+    # t is numpy array of lagtimes
+    if gaps is None or gaps.sum() == 0:
+        return np.array([_N_msd_nogaps(N, float(ti)) for ti in t])
+    # the length of gaps should equal N
+    if len(gaps) != N:
+        return np.zeros(N, dtype=np.float)
+    return np.array([_N_msd_gaps(N, float(ti), gaps) for ti in t])   
+        
+
 def msd(traj, mpp, fps, max_lagtime=100, detail=False, pos_columns=['x', 'y']):
     """Compute the mean displacement and mean squared displacement of one
     trajectory over a range of time intervals.
@@ -24,9 +69,11 @@ def msd(traj, mpp, fps, max_lagtime=100, detail=False, pos_columns=['x', 'y']):
     DataFrame([<x>, <y>, <x^2>, <y^2>, msd], index=t)
 
     If detail is True, the DataFrame also contains a column N,
-    the estimated number of statistically independent measurements
-    that comprise the result at each lagtime.
-
+    N is the number of statistically independent measurements, using the exact
+    relation from Elson et al., Biophys. J. 60, 1991, 910-21. When there are gaps
+    in the trajectory, the covariance matrix is determined and summed to obtain
+    the effective number of independent measurements.
+    
     Notes
     -----
     Input units are pixels and frames. Output units are microns and seconds.
@@ -36,10 +83,9 @@ def msd(traj, mpp, fps, max_lagtime=100, detail=False, pos_columns=['x', 'y']):
     imsd() and emsd()
     """
     pos = traj.set_index('frame')[pos_columns]
-    t = traj['frame']
     # Reindex with consecutive frames, placing NaNs in the gaps.
     pos = pos.reindex(np.arange(pos.index[0], 1 + pos.index[-1]))
-    max_lagtime = min(max_lagtime, len(t))  # checking to be safe
+    max_lagtime = min(max_lagtime, len(pos) - 1) # checking to be safe
     lagtimes = 1 + np.arange(max_lagtime)
     disp = pd.concat([pos.sub(pos.shift(lt)) for lt in lagtimes],
                      keys=lagtimes, names=['lagt', 'frames'])
@@ -47,11 +93,11 @@ def msd(traj, mpp, fps, max_lagtime=100, detail=False, pos_columns=['x', 'y']):
     results.columns = ['<{}>'.format(p) for p in pos_columns]
     results[['<{}^2>'.format(p) for p in pos_columns]] = mpp**2*(disp**2).mean(level=0)
     results['msd'] = mpp**2*(disp**2).mean(level=0).sum(1) # <r^2>
-    # Estimated statistically independent measurements = 2N/t
     if detail:
-        results['N'] = 2*disp.iloc[:,0].count(level=0).div(Series(lagtimes))
-    results['lagt'] = results.index.values/fps
-    return results[:-1]
+        results['N'] = _N_msd(len(pos), lagtimes,
+                                np.isnan(pos).any(axis=1).values)
+    results['lagt'] = results.index.values/float(fps)
+    return results
 
 
 def imsd(traj, mpp, fps, max_lagtime=100, statistic='msd', pos_columns=['x', 'y']):
@@ -67,7 +113,7 @@ def imsd(traj, mpp, fps, max_lagtime=100, statistic='msd', pos_columns=['x', 'y'
         Default: 100
     statistic : {'msd', '<x>', '<y>', '<x^2>', '<y^2>'}, default is 'msd'
         The functions msd() and emsd() return all these as columns. For
-        imsd() you have to pick one.
+        imsd() you have to select the ones you need (e.g.: ['msd', 'N'])
 
     Returns
     -------
@@ -79,10 +125,14 @@ def imsd(traj, mpp, fps, max_lagtime=100, statistic='msd', pos_columns=['x', 'y'
     """
     ids = []
     msds = []
+    if statistic == 'msd':
+        detail = False
+    else:
+        detail = True
     # Note: Index is set by msd, so we don't need to worry
     # about conformity here.
     for pid, ptraj in traj.groupby('particle'):
-        msds.append(msd(ptraj, mpp, fps, max_lagtime, False, pos_columns))
+        msds.append(msd(ptraj, mpp, fps, max_lagtime, detail, pos_columns))
         ids.append(pid)
     results = pd.concat(msds, keys=ids)
     # Swap MultiIndex levels so that unstack() makes particles into columns.
@@ -92,9 +142,9 @@ def imsd(traj, mpp, fps, max_lagtime=100, statistic='msd', pos_columns=['x', 'y'
     results.index.name = 'lag time [s]'
     return results
 
-
-def emsd(traj, mpp, fps, max_lagtime=100, detail=False, pos_columns=['x', 'y']):
-    """Compute the ensemble mean squared displacements of many particles.
+def emsd(traj, mpp, fps, max_lagtime=100, detail=False, pos_columns=['x', 'y'], 
+         bootstrap=False, bootstrapkwarg={}):
+    """Compute the mean squared displacements of an ensemble of particles.
 
     Parameters
     ----------
@@ -106,12 +156,15 @@ def emsd(traj, mpp, fps, max_lagtime=100, detail=False, pos_columns=['x', 'y']):
         Default: 100
     detail : Set to True to include <x>, <y>, <x^2>, <y^2>. Returns
         only <r^2> by default.
-
+    bootstrap : Determines whether bootstrapping is used to determine confidence
+        interval. Needs https://github.com/cgevans/scikits-bootstrap.
+    bootstrapkwarg : passed to boostrap.ci
     Returns
     -------
     Series[msd, index=t] or, if detail=True,
-    DataFrame([<x>, <y>, <x^2>, <y^2>, msd], index=t)
-
+    DataFrame([<x>, <y>, <x^2>, <y^2>, msd, N], index=t)
+    bootstrap additionally adds [msd_min, msd_max]
+    
     Notes
     -----
     Input units are pixels and frames. Output units are microns and seconds.
@@ -121,13 +174,34 @@ def emsd(traj, mpp, fps, max_lagtime=100, detail=False, pos_columns=['x', 'y']):
     for pid, ptraj in traj.reset_index(drop=True).groupby('particle'):
         msds.append(msd(ptraj, mpp, fps, max_lagtime, True, pos_columns))
         ids.append(pid)
-    msds = pd.concat(msds, keys=ids, names=['particle', 'frame'])
-    results = msds.mul(msds['N'], axis=0).mean(level=1)  # weighted average
-    results = results.div(msds['N'].mean(level=1), axis=0)  # weights normalized
+    msds = pd.concat(msds, keys=ids, names=['particle', 'lagt'])
+    results = msds.mul(msds['N'], axis=0).mean(level=1) # weighted average
+    results = results.div(msds['N'].mean(level=1), axis=0) # weights normalized
     # Above, lagt is lumped in with the rest for simplicity and speed.
     # Here, rebuild it from the frame index.
     if not detail:
         return results.set_index('lagt')['msd']
+    results['N'] = msds['N'].sum(level=1)
+    
+    if bootstrap and not btstr is None:
+        # Swap MultiIndex levels so that unstack() makes particles into columns.
+        msd_N = msds.swaplevel(0, 1)[['msd','N']].unstack()    
+        conf = []
+        # iterate over all lagtimes
+        for k in range(len(msd_N)):
+            # bootstrap.ci cannot deal with np.nan, also throw away N=0 here
+            notnan = msd_N['N'].values[k] > 0
+            # crashes at Ntotal = 1 or Ntotal = 2, need enough N anyway
+            if np.sum(msd_N['N'].values[k][notnan]) > 10:
+                conf.append(btstr.ci((msd_N['msd'].values[k][notnan],
+                                      msd_N['N'].values[k][notnan]), 
+                                    lambda x,y: np.average(x, weights=y),
+                                     multi=True, **bootstrapkwarg))
+            else:
+                conf.append([np.nan, np.nan])
+        conf = np.array(conf)
+        results['msd_min'] = conf[:, 0]
+        results['msd_max'] = conf[:, 1]
     return results
 
 
