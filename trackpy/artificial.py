@@ -96,13 +96,18 @@ def draw_feature(image, position, diameter, max_value=None,
     image[rect] += spot.astype(image.dtype)
 
 
-def gen_random_locations(shape, count, margin=0):
+def gen_random_locations(shape, count, margin=0, subpx=False):
     """ Generates `count` number of positions within `shape`. If a `margin` is
     given, positions will be inside this margin. Margin may be tuple-valued.
+    When `subpx`=False, only returns integer coordinates.
     """
+    if subpx:
+        rand_gen = np.random.uniform
+    else:
+        rand_gen = np.random.randint
     margin = validate_tuple(margin, len(shape))
     np.random.seed(0)
-    pos = [np.random.randint(round(m), round(s - m), count)
+    pos = [rand_gen(round(m), round(s - m), count)
            for (s, m) in zip(shape, margin)]
     return np.array(pos).T
 
@@ -126,14 +131,16 @@ def eliminate_overlapping_locations(f, separation):
     return f * separation
 
 
-def gen_nonoverlapping_locations(shape, count, separation, margin=0):
+def gen_nonoverlapping_locations(shape, count, separation, margin=0,
+                                 subpx=False):
     """ Generates `count` number of positions within `shape`, that have minimum
     distance `separation` from each other. The number of positions returned may
     be lower than `count`, because positions too close to each other will be
     deleted. If a `margin` is given, positions will be inside this margin.
     Margin may be tuple-valued.
+    When `subpx`=False, only returns integer coordinates.
     """
-    positions = gen_random_locations(shape, count, margin)
+    positions = gen_random_locations(shape, count, margin, subpx)
     return eliminate_overlapping_locations(positions, separation)
 
 
