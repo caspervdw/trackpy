@@ -27,6 +27,13 @@ __all__ = ['annotate', 'scatter', 'plot_traj', 'ptraj',
 logger = logging.getLogger(__name__)
 
 
+_ANNOTATE_PLOT_STYLE = dict(markersize=15, markeredgewidth=2,
+                            markerfacecolor='none', markeredgecolor='r',
+                            marker='o', linestyle='none')
+_ANNOTATE_IMSHOW_STYLE = dict(origin='lower', interpolation='nearest',
+                              cmap=plt.cm.gray)
+
+
 def make_axes(func):
     """
     A decorator for plotting functions.
@@ -395,7 +402,7 @@ ptraj3d = plot_traj3d
 def annotate(centroids, image, circle_size=None, color=None,
              invert=False, ax=None, split_category=None, split_thresh=None,
              imshow_style={}, plot_style={}):
-    """Mark identified features with white circles.
+    """Mark identified features on a single frame.
 
     Parameters
     ----------
@@ -426,6 +433,7 @@ def annotate(centroids, image, circle_size=None, color=None,
     
     See Also
     --------
+    annotate_movie : The equivalent for series of frames.
     annotate3d : The 3D equivalent that returns a scrollable stack.
     """
     import matplotlib.pyplot as plt
@@ -444,12 +452,9 @@ def annotate(centroids, image, circle_size=None, color=None,
         else:
             raise ValueError("passed in both 'marker_size' and 'circle_size'")
 
-    _plot_style = dict(markersize=15, markeredgewidth=2,
-                       markerfacecolor='none', markeredgecolor='r',
-                       marker='o', linestyle='none')
+    _plot_style = _ANNOTATE_PLOT_STYLE.copy()
     _plot_style.update(**_normalize_kwargs(plot_style, 'line2d'))
-    _imshow_style = dict(origin='lower', interpolation='nearest',
-                         cmap=plt.cm.gray)
+    _imshow_style = _ANNOTATE_IMSHOW_STYLE.copy()
     _imshow_style.update(imshow_style)
 
     # https://docs.python.org/2/library/itertools.html
@@ -505,6 +510,70 @@ def annotate(centroids, image, circle_size=None, color=None,
         ax.plot(centroids['x'][high], centroids['y'][high],
                 **_plot_style)
     return ax
+
+@make_fig
+def annotate_movie(f, images, fps=None, pos_columns=None, fig=None,
+                   imshow_style={}, plot_style={}):
+    """Mark identified features on a movie.
+
+    Parameters
+    ----------
+    f : DataFrame including columns x and y
+    images : iterable of image arrays
+    fps : frames per second
+    pos_columns : list of string
+        the position columns to use for plotting, default ['x', 'y']
+    fig : the Figure object on which the plot will be done
+    imshow_style : dictionary of keyword arguments passed through to
+        the `Axes.imshow(...)` command the displays the image
+    plot_style : dictionary of keyword arguments passed through to
+        the `Axes.plot(...)` command that marks the features
+
+    Returns
+    -------
+    matplotlib FuncAnimation object.
+    Export a movie with return_value.save(filename)
+    See: http://matplotlib.org/api/animation_api.html#matplotlib.animation.Animation
+
+    See Also
+    --------
+    annotate : Annotate a single frame
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.animation as anim
+    if pos_columns is None:
+        pos_columns = ['x', 'y']  # matplotlib order
+
+    _plot_style = _ANNOTATE_PLOT_STYLE.copy()
+    _plot_style.update(**_normalize_kwargs(plot_style, 'line2d'))
+    _imshow_style = _ANNOTATE_IMSHOW_STYLE.copy()
+    _imshow_style.update(imshow_style)
+
+    try:
+        shape = images.frame_shape
+        dtype = images.pixel_type
+        length = len(images)
+    except AttributeError:
+        raise ValueError("images should be a PIMS reader")
+
+    if len(shape) != 2 and not (len(shape) == 3 and shape[-1] in (3, 4)):
+        raise ValueError("image has incorrect dimensions. Please input a 2D "
+                         "grayscale or RGB(A) image. For 3D image annotation, "
+                         "use annotate3d. Multichannel images can be "
+                         "converted to RGB using pims.display.to_rgb.")
+
+    ax_im = plt.imshow(np.empty(shape, dtype), **_imshow_style)
+    plt.xlim(-0.5, shape[1] - 0.5)
+    plt.ylim(shape[0] - 0.5, -0.5)
+    ax_points, = plt.plot([], [], **_plot_style)
+
+    def _annotate_frame(frame_no):
+        ax_im.set_data(images[frame_no])
+        ax_points.set_data(f.loc[f['frame'] == frame_no, pos_columns].values.T)
+        return ax_im, ax_points
+
+    return anim.FuncAnimation(fig, _annotate_frame, length,
+                              interval=1000/fps, repeat=False, blit=True)
 
 
 def annotate3d(centroids, image, **kwargs):
