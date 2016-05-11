@@ -70,13 +70,13 @@ after_success:
         git clone git@github.com:soft-matter/soft-matter.github.io.git ./doc-repo
         cd doc-repo/trackpy
         git checkout --orphan temp_branch
-        git rm -rf ./dev
+        git rm -rfq ./dev
         mv $TRAVIS_BUILD_DIR/doc/_build/html ./dev
         if [ -n "$TRAVIS_TAG" ]; then
           cp -R dev $TRAVIS_TAG;
         fi
         git add -A
-        git commit -m "Docs build of trackpy commit $TRAVIS_COMMIT"
+        git commit -q -m "Docs build of trackpy commit $TRAVIS_COMMIT"
         git branch -D master
         git branch -m master
         git push --set-upstream origin master --force
