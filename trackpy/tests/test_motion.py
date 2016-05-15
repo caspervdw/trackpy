@@ -12,12 +12,14 @@ from pandas.util.testing import (assert_series_equal, assert_frame_equal,
 import trackpy as tp
 from trackpy.utils import pandas_sort
 
+from scipy import stats
+
 # Catch attempts to set values on an inadvertent copy of a Pandas object.
 tp.utils.make_pandas_strict()
 
 
 def random_walk(N):
-    return np.cumsum(np.random.randn(N))
+    return np.cumsum(stats.norm.rvs(size=N))
 
 
 def conformity(df):
