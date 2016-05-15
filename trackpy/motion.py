@@ -7,7 +7,8 @@ from pandas import DataFrame, Series
 from scipy.spatial import cKDTree
 
 
-def msd(traj, mpp, fps, max_lagtime=100, detail=False, pos_columns=None):
+def msd(traj, mpp, fps, max_lagtime=100, detail=False, pos_columns=None,
+        moments=(1, 2)):
     """Compute the mean displacement and mean squared displacement of one
     trajectory over a range of time intervals.
 
@@ -19,6 +20,9 @@ def msd(traj, mpp, fps, max_lagtime=100, detail=False, pos_columns=None):
     max_lagtime : intervals of frames out to which MSD is computed
         Default: 100
     detail : See below. Default False.
+    pos_columns: list
+    moments: tuple
+        tuple defining the moments that are returned. default first en second.
 
     Returns
     -------
@@ -38,10 +42,12 @@ def msd(traj, mpp, fps, max_lagtime=100, detail=False, pos_columns=None):
     """
     if traj['frame'].max() - traj['frame'].min() + 1 == len(traj):
         # no gaps: use fourier-transform algorithm
-        return _msd_fft(traj, mpp, fps, max_lagtime, detail, pos_columns)
+        return _msd_fft(traj, mpp, fps, max_lagtime, detail, pos_columns,
+                        moments)
     else:
         # there are gaps in the trajectory: use slower algorithm
-        return _msd_gaps(traj, mpp, fps, max_lagtime, detail, pos_columns)
+        return _msd_gaps(traj, mpp, fps, max_lagtime, detail, pos_columns,
+                         moments)
 
 
 def _msd_N(N, t):
@@ -68,20 +74,25 @@ def _msd_N(N, t):
                     6*(N-t)**2*t/(2*N-t+4*N*t**2-5*t**3))
 
 
-def _msd_iter(pos, lagtimes):
+def _msd_iter(pos, lagtimes, moments):
     for lt in lagtimes:
         diff = pos[lt:] - pos[:-lt]
-        yield np.concatenate((np.nanmean(diff, axis=0),
-                              np.nanmean(diff**2, axis=0)))
+        yield np.concatenate([np.nanmean(diff**n, axis=0) for n in moments])
 
 
-def _msd_gaps(traj, mpp, fps, max_lagtime=100, detail=False, pos_columns=None):
+def _msd_gaps(traj, mpp, fps, max_lagtime=100, detail=False, pos_columns=None,
+              moments=(1, 2)):
     """Compute the mean displacement and mean squared displacement of one
     trajectory over a range of time intervals."""
     if pos_columns is None:
         pos_columns = ['x', 'y']
-    result_columns = ['<{}>'.format(p) for p in pos_columns] + \
-                     ['<{}^2>'.format(p) for p in pos_columns]
+    moment_columns = []
+    for n in moments:
+        if n == 1:
+            moment_columns.append(['<{}>'.format(p) for p in pos_columns])
+        else:
+            moment_columns.append(['<{0}^{1}>'.format(p, n) for p in pos_columns])
+    result_columns = [item for sublist in moment_columns for item in sublist]
 
     # Reindex with consecutive frames, placing NaNs in the gaps.
     pos = traj.set_index('frame')[pos_columns] * mpp
@@ -91,9 +102,14 @@ def _msd_gaps(traj, mpp, fps, max_lagtime=100, detail=False, pos_columns=None):
 
     lagtimes = np.arange(1, max_lagtime + 1)
 
-    result = pd.DataFrame(_msd_iter(pos.values, lagtimes),
+    result = pd.DataFrame(_msd_iter(pos.values, lagtimes, moments),
                           columns=result_columns, index=lagtimes)
-    result['msd'] = result[result_columns[-len(pos_columns):]].sum(1)
+    for n, cols in zip(moments, moment_columns):
+        if n == 2:
+            result['msd'] = result[cols].sum(1)
+        else:
+            result['md^{}'.format(n)] = result[cols].sum(1)
+
     if detail:
         # effective number of measurements
         # approximately corrected with number of gaps
@@ -103,7 +119,8 @@ def _msd_gaps(traj, mpp, fps, max_lagtime=100, detail=False, pos_columns=None):
     return result
 
 
-def _msd_fft(traj, mpp, fps, max_lagtime=100, detail=False, pos_columns=None):
+def _msd_fft(traj, mpp, fps, max_lagtime=100, detail=False, pos_columns=None,
+             moments=(1, 2)):
     """Compute the mean displacement and mean squared displacement of one
     trajectory over a range of time intervals using FFT transformation.
 
@@ -113,8 +130,13 @@ def _msd_fft(traj, mpp, fps, max_lagtime=100, detail=False, pos_columns=None):
     """
     if pos_columns is None:
         pos_columns = ['x', 'y']
-    result_columns = ['<{}>'.format(p) for p in pos_columns] + \
-                     ['<{}^2>'.format(p) for p in pos_columns]
+    moment_columns = []
+    for n in moments:
+        if n == 1:
+            moment_columns.append(['<{}>'.format(p) for p in pos_columns])
+        else:
+            moment_columns.append(['<{0}^{1}>'.format(p, n) for p in pos_columns])
+    result_columns = [item for sublist in moment_columns for item in sublist]
 
     r = traj[pos_columns].values * mpp
     t = traj['frame']
@@ -123,24 +145,38 @@ def _msd_fft(traj, mpp, fps, max_lagtime=100, detail=False, pos_columns=None):
     lagtimes = np.arange(1, max_lagtime + 1)
     N = len(r)
 
-    # calculate the mean displacements
-    r_diff = r[:-max_lagtime-1:-1] - r[:max_lagtime]
-    disp = np.cumsum(r_diff, axis=0) / (N - lagtimes[:, np.newaxis])
+    result = []
+    if 1 in moments:
+        # calculate the mean displacements
+        r_diff = r[:-max_lagtime-1:-1] - r[:max_lagtime]
+        disp = np.cumsum(r_diff, axis=0) / (N - lagtimes[:, np.newaxis])
+        result.append(disp)
 
-    # below is a vectorized version of the original code
-    D = r**2
-    D_sum = D[:max_lagtime] + D[:-max_lagtime-1:-1]
-    S1 = 2*D.sum(axis=0) - np.cumsum(D_sum, axis=0)
-    F = np.fft.fft(r, n=2*N, axis=0)  # 2*N because of zero-padding
-    PSD = F * F.conjugate()
-    # this is the autocorrelation in convention B:
-    S2 = np.fft.ifft(PSD, axis=0)[1:max_lagtime+1].real
-    squared_disp = S1 - 2 * S2
-    squared_disp /= N - lagtimes[:, np.newaxis]  # divide res(m) by (N-m)
+    if 2 in moments:
+        # below is a vectorized version of the original code
+        D = r**2
+        D_sum = D[:max_lagtime] + D[:-max_lagtime-1:-1]
+        S1 = 2*D.sum(axis=0) - np.cumsum(D_sum, axis=0)
+        F = np.fft.fft(r, n=2*N, axis=0)  # 2*N because of zero-padding
+        PSD = F * F.conjugate()
+        # this is the autocorrelation in convention B:
+        S2 = np.fft.ifft(PSD, axis=0)[1:max_lagtime+1].real
+        squared_disp = S1 - 2 * S2
+        squared_disp /= N - lagtimes[:, np.newaxis]  # divide res(m) by (N-m)
+        result.append(squared_disp)
 
-    results = pd.DataFrame(np.concatenate((disp, squared_disp), axis=1),
+    other_moments = [m for m in moments if m not in (1, 2)]
+    if len(other_moments) > 0:
+        result.append(list(_msd_iter(r, lagtimes, other_moments)))
+
+    results = pd.DataFrame(np.concatenate(result, axis=1),
                            index=lagtimes, columns=result_columns)
-    results['msd'] = squared_disp.sum(axis=1)
+    for n, cols in zip(moments, moment_columns):
+        if n == 2:
+            results['msd'] = results[cols].sum(1)
+        else:
+            results['md^{}'.format(n)] = results[cols].sum(1)
+
     if detail:
         results['N'] = _msd_N(N, lagtimes)
     results['lagt'] = lagtimes / float(fps)
@@ -149,7 +185,8 @@ def _msd_fft(traj, mpp, fps, max_lagtime=100, detail=False, pos_columns=None):
     return results
 
 
-def imsd(traj, mpp, fps, max_lagtime=100, statistic='msd', pos_columns=None):
+def imsd(traj, mpp, fps, max_lagtime=100, statistic='msd', pos_columns=None,
+         moments=(1, 2)):
     """Compute the mean squared displacement of each particle.
 
     Parameters
@@ -177,7 +214,8 @@ def imsd(traj, mpp, fps, max_lagtime=100, statistic='msd', pos_columns=None):
     # Note: Index is set by msd, so we don't need to worry
     # about conformity here.
     for pid, ptraj in traj.groupby('particle'):
-        msds.append(msd(ptraj, mpp, fps, max_lagtime, False, pos_columns))
+        msds.append(msd(ptraj, mpp, fps, max_lagtime, False, pos_columns,
+                        moments))
         ids.append(pid)
     results = pd.concat(msds, keys=ids)
     # Swap MultiIndex levels so that unstack() makes particles into columns.
@@ -188,7 +226,8 @@ def imsd(traj, mpp, fps, max_lagtime=100, statistic='msd', pos_columns=None):
     return results
 
 
-def emsd(traj, mpp, fps, max_lagtime=100, detail=False, pos_columns=None):
+def emsd(traj, mpp, fps, max_lagtime=100, detail=False, pos_columns=None,
+         moments=(1, 2)):
     """Compute the ensemble mean squared displacements of many particles.
 
     Parameters
@@ -213,8 +252,11 @@ def emsd(traj, mpp, fps, max_lagtime=100, detail=False, pos_columns=None):
     """
     ids = []
     msds = []
+    if not detail:
+        moments = (moments[-1],)
     for pid, ptraj in traj.reset_index(drop=True).groupby('particle'):
-        msds.append(msd(ptraj, mpp, fps, max_lagtime, True, pos_columns))
+        msds.append(msd(ptraj, mpp, fps, max_lagtime, True, pos_columns,
+                        moments))
         ids.append(pid)
     msds = pd.concat(msds, keys=ids, names=['particle', 'frame'])
     results = msds.mul(msds['N'], axis=0).mean(level=1)  # weighted average
@@ -222,7 +264,12 @@ def emsd(traj, mpp, fps, max_lagtime=100, detail=False, pos_columns=None):
     # Above, lagt is lumped in with the rest for simplicity and speed.
     # Here, rebuild it from the frame index.
     if not detail:
-        return results.set_index('lagt')['msd']
+        n = moments[-1]
+        if n == 2:
+            return_col = 'msd'
+        else:
+            return_col = 'md^{}'.format(n)
+        return results.set_index('lagt')[return_col]
     return results
 
 
