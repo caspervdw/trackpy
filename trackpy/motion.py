@@ -40,14 +40,54 @@ def msd(traj, mpp, fps, max_lagtime=100, detail=False, pos_columns=None,
     --------
     imsd() and emsd()
     """
-    if traj['frame'].max() - traj['frame'].min() + 1 == len(traj):
-        # no gaps: use fourier-transform algorithm
-        return _msd_fft(traj, mpp, fps, max_lagtime, detail, pos_columns,
-                        moments)
+    if pos_columns is None:
+        pos_columns = ['x', 'y']
+    moment_columns = []
+    for n in moments:
+        if n == 1:
+            moment_columns.append(['<{}>'.format(p) for p in pos_columns])
+        else:
+            moment_columns.append(['<{0}^{1}>'.format(p, n) for p in pos_columns])
+    result_columns = [item for sublist in moment_columns for item in sublist]
+
+    traj = traj.set_index('frame', inplace=False)
+    if traj.index.max() - traj.index.min() + 1 == len(traj):
+        use_fft = True
     else:
-        # there are gaps in the trajectory: use slower algorithm
-        return _msd_gaps(traj, mpp, fps, max_lagtime, detail, pos_columns,
-                         moments)
+        traj = traj.reindex(np.arange(traj.index[0], 1 + traj.index[-1]))
+        use_fft = False
+
+    pos = traj[pos_columns].values * mpp
+    max_lagtime = min(max_lagtime, len(pos) - 1)  # checking to be safe
+    lagtimes = np.arange(1, max_lagtime + 1)
+
+    result = []
+    if use_fft:
+        if 1 in moments:
+            result.extend(_md_nogaps(pos, lagtimes))
+        if 2 in moments:
+            result.extend(_msd_fft(pos, lagtimes))
+        other_moments = [m for m in moments if m not in (1, 2)]
+    else:
+        other_moments = moments
+
+    if len(other_moments) > 0:
+        result.extend(list(_msd_iter(pos, lagtimes, other_moments)))
+
+    result = pd.DataFrame(result, index=lagtimes, columns=result_columns)
+
+    for n, cols in zip(moments, moment_columns):
+        if n == 2:
+            result['msd'] = result[cols].sum(1)
+        else:
+            result['md^{}'.format(n)] = result[cols].sum(1)
+
+    if detail:
+        result['N'] = _msd_N(len(pos), lagtimes)
+    result['lagt'] = lagtimes / float(fps)
+    result.index.name = 'lagt'
+
+    return result
 
 
 def _msd_N(N, t):
@@ -80,109 +120,35 @@ def _msd_iter(pos, lagtimes, moments):
         yield np.concatenate([np.nanmean(diff**n, axis=0) for n in moments])
 
 
-def _msd_gaps(traj, mpp, fps, max_lagtime=100, detail=False, pos_columns=None,
-              moments=(1, 2)):
-    """Compute the mean displacement and mean squared displacement of one
-    trajectory over a range of time intervals."""
-    if pos_columns is None:
-        pos_columns = ['x', 'y']
-    moment_columns = []
-    for n in moments:
-        if n == 1:
-            moment_columns.append(['<{}>'.format(p) for p in pos_columns])
-        else:
-            moment_columns.append(['<{0}^{1}>'.format(p, n) for p in pos_columns])
-    result_columns = [item for sublist in moment_columns for item in sublist]
-
-    # Reindex with consecutive frames, placing NaNs in the gaps.
-    pos = traj.set_index('frame')[pos_columns] * mpp
-    pos = pos.reindex(np.arange(pos.index[0], 1 + pos.index[-1]))
-
-    max_lagtime = min(max_lagtime, len(pos) - 1)  # checking to be safe
-
-    lagtimes = np.arange(1, max_lagtime + 1)
-
-    result = pd.DataFrame(_msd_iter(pos.values, lagtimes, moments),
-                          columns=result_columns, index=lagtimes)
-    for n, cols in zip(moments, moment_columns):
-        if n == 2:
-            result['msd'] = result[cols].sum(1)
-        else:
-            result['md^{}'.format(n)] = result[cols].sum(1)
-
-    if detail:
-        # effective number of measurements
-        # approximately corrected with number of gaps
-        result['N'] = _msd_N(len(pos), lagtimes) * len(traj) / len(pos)
-    result['lagt'] = result.index.values/float(fps)
-    result.index.name = 'lagt'
-    return result
+def _md_nogaps(pos, lagtimes):
+    pos_diff = pos[:-lagtimes[-1]-1:-1] - pos[:lagtimes[-1]]
+    disp = np.cumsum(pos_diff, axis=0) / (len(pos) - lagtimes[:, np.newaxis])
+    return disp
 
 
-def _msd_fft(traj, mpp, fps, max_lagtime=100, detail=False, pos_columns=None,
-             moments=(1, 2)):
-    """Compute the mean displacement and mean squared displacement of one
+def _msd_fft(pos, lagtimes):
+    """Compute the mean squared displacement of one
     trajectory over a range of time intervals using FFT transformation.
 
     The original Python implementation comes from a SO answer :
     http://stackoverflow.com/questions/34222272/computing-mean-square-displacement-using-python-and-fft#34222273.
     The algorithm is described in this paper : http://dx.doi.org/10.1051/sfn/201112010.
     """
-    if pos_columns is None:
-        pos_columns = ['x', 'y']
-    moment_columns = []
-    for n in moments:
-        if n == 1:
-            moment_columns.append(['<{}>'.format(p) for p in pos_columns])
-        else:
-            moment_columns.append(['<{0}^{1}>'.format(p, n) for p in pos_columns])
-    result_columns = [item for sublist in moment_columns for item in sublist]
+    N = len(pos)
+    max_lagtime = lagtimes[-1]
 
-    r = traj[pos_columns].values * mpp
-    t = traj['frame']
+    # below is a vectorized version of the original code
+    D = pos**2
+    D_sum = D[:max_lagtime] + D[:-max_lagtime-1:-1]
+    S1 = 2*D.sum(axis=0) - np.cumsum(D_sum, axis=0)
+    F = np.fft.fft(pos, n=2*N, axis=0)  # 2*N because of zero-padding
+    PSD = F * F.conjugate()
+    # this is the autocorrelation in convention B:
+    S2 = np.fft.ifft(PSD, axis=0)[1:max_lagtime+1].real
+    squared_disp = S1 - 2 * S2
+    squared_disp /= N - lagtimes[:, np.newaxis]  # divide res(m) by (N-m)
 
-    max_lagtime = min(max_lagtime, len(t) - 1)  # checking to be safe
-    lagtimes = np.arange(1, max_lagtime + 1)
-    N = len(r)
-
-    result = []
-    if 1 in moments:
-        # calculate the mean displacements
-        r_diff = r[:-max_lagtime-1:-1] - r[:max_lagtime]
-        disp = np.cumsum(r_diff, axis=0) / (N - lagtimes[:, np.newaxis])
-        result.append(disp)
-
-    if 2 in moments:
-        # below is a vectorized version of the original code
-        D = r**2
-        D_sum = D[:max_lagtime] + D[:-max_lagtime-1:-1]
-        S1 = 2*D.sum(axis=0) - np.cumsum(D_sum, axis=0)
-        F = np.fft.fft(r, n=2*N, axis=0)  # 2*N because of zero-padding
-        PSD = F * F.conjugate()
-        # this is the autocorrelation in convention B:
-        S2 = np.fft.ifft(PSD, axis=0)[1:max_lagtime+1].real
-        squared_disp = S1 - 2 * S2
-        squared_disp /= N - lagtimes[:, np.newaxis]  # divide res(m) by (N-m)
-        result.append(squared_disp)
-
-    other_moments = [m for m in moments if m not in (1, 2)]
-    if len(other_moments) > 0:
-        result.append(list(_msd_iter(r, lagtimes, other_moments)))
-
-    results = pd.DataFrame(np.concatenate(result, axis=1),
-                           index=lagtimes, columns=result_columns)
-    for n, cols in zip(moments, moment_columns):
-        if n == 2:
-            results['msd'] = results[cols].sum(1)
-        else:
-            results['md^{}'.format(n)] = results[cols].sum(1)
-
-    if detail:
-        results['N'] = _msd_N(N, lagtimes)
-    results['lagt'] = lagtimes / float(fps)
-    results.index.name = 'lagt'
-
-    return results
+    return squared_disp
 
 
 def imsd(traj, mpp, fps, max_lagtime=100, statistic='msd', pos_columns=None,
