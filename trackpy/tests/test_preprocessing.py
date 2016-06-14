@@ -6,7 +6,7 @@ from trackpy.artificial import gen_nonoverlapping_locations, draw_spots
 
 
 pos = gen_nonoverlapping_locations((512, 512), 200, 20)
-frame = draw_spots((512, 512), pos, 20, noise_level=100)
+frame = draw_spots((512, 512), pos, 3.3, noise_level=100)
 margin = 11
 bp_scipy = bandpass(frame, 3, 11)[margin:-margin, margin:-margin]
 

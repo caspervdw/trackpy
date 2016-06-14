@@ -30,15 +30,17 @@ tp.utils.make_pandas_strict()
 path, _ = os.path.split(os.path.abspath(__file__))
 
 
-def compare(shape, count, radius, noise_level, engine):
-    radius = tp.utils.validate_tuple(radius, len(shape))
+def compare(shape, count, size, noise_level, engine):
+    size = tp.utils.validate_tuple(size, len(shape))
+    radius = tuple([int(round(2 * s)) for s in size])
     # tp.locate ignores a margin of size radius, take 1 px more to be safe
     margin = tuple([r + 1 for r in radius])
     diameter = tuple([(r * 2) + 1 for r in radius])
-    draw_range = tuple([d * 3 for d in diameter])
+    separation = tuple([2 * d for d in diameter])
+
     cols = ['x', 'y', 'z'][:len(shape)][::-1]
-    pos = gen_nonoverlapping_locations(shape, count, draw_range, margin)
-    image = draw_spots(shape, pos, draw_range, noise_level)
+    pos = gen_nonoverlapping_locations(shape, count, separation, margin)
+    image = draw_spots(shape, pos, size, noise_level)
     f = tp.locate(image, diameter, engine=engine)
     actual = pandas_sort(f[cols], cols)
     expected = pandas_sort(DataFrame(pos, columns=cols), cols)
@@ -60,12 +62,12 @@ class OldMinmass(unittest.TestCase):
         self.pos = gen_nonoverlapping_locations(self.shape, 10, separation=20,
                                                 margin=10)
         self.N = len(self.pos)
-        self.draw_diameter = 25
+        self.draw_size = 4
         self.tp_diameter = 15
     
     def test_oldmass_8bit(self):
         old_minmass = 11000
-        im = draw_spots(self.shape, self.pos, self.draw_diameter, bitdepth=8,
+        im = draw_spots(self.shape, self.pos, self.draw_size, bitdepth=8,
                         noise_level=50)
 
         new_minmass = tp.minmass_version_change(im, old_minmass,
@@ -75,7 +77,7 @@ class OldMinmass(unittest.TestCase):
 
     def test_oldmass_12bit(self):
         old_minmass = 2800000
-        im = draw_spots(self.shape, self.pos, self.draw_diameter, bitdepth=12,
+        im = draw_spots(self.shape, self.pos, self.draw_size, bitdepth=12,
                         noise_level=500)
 
         new_minmass = tp.minmass_version_change(im, old_minmass,
@@ -85,7 +87,7 @@ class OldMinmass(unittest.TestCase):
 
     def test_oldmass_16bit(self):
         old_minmass = 2800000
-        im = draw_spots(self.shape, self.pos, self.draw_diameter, bitdepth=16,
+        im = draw_spots(self.shape, self.pos, self.draw_size, bitdepth=16,
                         noise_level=10000)
 
         new_minmass = tp.minmass_version_change(im, old_minmass,
@@ -95,7 +97,7 @@ class OldMinmass(unittest.TestCase):
 
     def test_oldmass_float(self):
         old_minmass = 5500
-        im = draw_spots(self.shape, self.pos, self.draw_diameter, bitdepth=8,
+        im = draw_spots(self.shape, self.pos, self.draw_size, bitdepth=8,
                         noise_level=50)
         im = (im / im.max()).astype(np.float)
 
@@ -106,7 +108,7 @@ class OldMinmass(unittest.TestCase):
         
     def test_oldmass_invert(self):
         old_minmass = 2800000
-        im = draw_spots(self.shape, self.pos, self.draw_diameter, bitdepth=12,
+        im = draw_spots(self.shape, self.pos, self.draw_size, bitdepth=12,
                         noise_level=500)
         im = (im.max() - im + 10000)
 
@@ -250,7 +252,7 @@ class CommonFeatureIdentificationTests(object):
         expected = DataFrame(np.asarray(pos).reshape(1, -1), columns=cols)
 
         image = np.ones(dims, dtype='uint8')
-        draw_feature(image, pos, 27)
+        draw_feature(image, pos, 4.5)
         actual = tp.locate(image, 9, 1, preprocess=False,
                            engine=self.engine)[cols]
         assert_allclose(actual, expected, atol=0.1)
@@ -264,7 +266,7 @@ class CommonFeatureIdentificationTests(object):
         expected = DataFrame(np.asarray(pos).reshape(1, -1), columns=cols)
 
         image = np.ones(dims, dtype='uint8')
-        draw_feature(image, pos, 27)
+        draw_feature(image, pos, 4.5)
         actual = tp.locate(image, 9, 1, preprocess=False,
                            engine=self.engine)[cols]
         assert_allclose(actual, expected, atol=0.1)
@@ -278,7 +280,7 @@ class CommonFeatureIdentificationTests(object):
         expected = DataFrame(np.asarray(pos).reshape(1, -1), columns=cols)
 
         image = np.ones(dims, dtype='uint8')
-        draw_feature(image, pos, (21, 27, 27))
+        draw_feature(image, pos, (3.5, 4.5, 4.5))
         actual = tp.locate(image, (7, 9, 9), 1, preprocess=False,
                            engine=self.engine)[cols]
         assert_allclose(actual, expected, atol=0.1)
@@ -296,7 +298,7 @@ class CommonFeatureIdentificationTests(object):
         dims = (y.max() - y.min() + 5*diameter, int(4 * diameter) - 2)
         image = np.ones(dims, dtype='uint8')
         for ypos, xpos in expected[['y', 'x']].values:
-            draw_feature(image, [ypos, xpos], 27, max_value=100)
+            draw_feature(image, [ypos, xpos], 4.5, max_value=100)
         def locate(image, **kwargs):
             return tp.locate(image, diameter, 1, preprocess=False,
                              engine=self.engine, **kwargs)[cols]
@@ -431,7 +433,7 @@ class CommonFeatureIdentificationTests(object):
 
     def test_nocharacterize(self):
         pos = gen_nonoverlapping_locations((200, 300), 9, 5)
-        image = draw_spots((200, 300), pos, 5)
+        image = draw_spots((200, 300), pos, 1)
         f_c = tp.locate(image, 5, engine=self.engine, characterize=True)
         f_nc = tp.locate(image, 5, engine=self.engine, characterize=False)
 
@@ -504,10 +506,10 @@ class CommonFeatureIdentificationTests(object):
         pos3 = np.array([25, 45])
         pos4 = np.array([35, 15])
 
-        draw_feature(image, pos1, 15)
-        draw_feature(image, pos2, 30)
-        draw_feature(image, pos3, 5)
-        draw_feature(image, pos4, 20)
+        draw_feature(image, pos1, 2.5)
+        draw_feature(image, pos2, 5.0)
+        draw_feature(image, pos3, 0.8)
+        draw_feature(image, pos4, 3.3)
 
         # filter on mass
         actual = tp.locate(image, 15, engine=self.engine, preprocess=False,
@@ -538,13 +540,14 @@ class CommonFeatureIdentificationTests(object):
         # noiseless mass + noise_size/2 * Npx_in_mask.
         self.check_skip()
         ndim = 2
-        radius = 6
+        size = 3
+        radius = 2*size
         N = 20
         shape = (128, 127)
 
         # Calculate the expected mass from a single spot using the set masksize
         center = (radius*2,) * ndim
-        spot = draw_spots((radius*4,) * ndim, [center], radius*3, bitdepth=12)
+        spot = draw_spots((radius*4,) * ndim, [center], size, bitdepth=12)
         rect = [slice(c - radius, c + radius + 1) for c in center]
         mask = tp.masks.binary_mask(radius, 2)
         Npx = mask.sum()
@@ -554,7 +557,7 @@ class CommonFeatureIdentificationTests(object):
         expected = gen_nonoverlapping_locations(shape, N, radius*3, radius+2)
         expected = expected + np.random.random(expected.shape)
         N = expected.shape[0]
-        image = draw_spots(shape, expected, radius*3, bitdepth=12)
+        image = draw_spots(shape, expected, radius*0.5, bitdepth=12)
 
         # analyze the image without noise
         f = tp.locate(image, radius*2+1, engine=self.engine, topn=N)
@@ -588,7 +591,7 @@ class CommonFeatureIdentificationTests(object):
         for pos in [[50, 55], [50.2, 55], [50.5, 55]]:
             for SIZE in [2, 3, 5, 7]:
                 image = np.zeros(dims, dtype='uint8')
-                draw_feature(image, pos, SIZE*8, rg=0.25)
+                draw_feature(image, pos, SIZE)
                 actual = tp.locate(image, SIZE*8 - 1, 1, preprocess=False,
                                    engine=self.engine)['size']
                 assert_allclose(actual, SIZE, rtol=0.1)
@@ -604,7 +607,7 @@ class CommonFeatureIdentificationTests(object):
         pos = [50, 55]
         for ar in [1.1, 1.5, 2]:
             image = np.zeros(dims, dtype='uint8')
-            draw_feature(image, pos, [int(SIZE*8*ar), SIZE*8], rg=0.25)
+            draw_feature(image, pos, [SIZE*ar, SIZE])
             f = tp.locate(image, [int(SIZE*4*ar) * 2 - 1, SIZE*8 - 1], 1,
                           preprocess=False, engine=self.engine)
             assert_allclose(f['size_x'], SIZE, rtol=0.1)
@@ -622,7 +625,7 @@ class CommonFeatureIdentificationTests(object):
 
         ECC = 0
         image = np.ones(dims, dtype='uint8')
-        draw_feature(image, pos, 27, ecc=ECC)
+        draw_feature(image, pos, 4.5, ecc=ECC)
         actual = tp.locate(image, 21, 1, preprocess=False,
                            engine=self.engine)['ecc']
         expected = ECC
@@ -630,7 +633,7 @@ class CommonFeatureIdentificationTests(object):
 
         ECC = 0.2
         image = np.ones(dims, dtype='uint8')
-        draw_feature(image, pos, 27, ecc=ECC)
+        draw_feature(image, pos, 4.5, ecc=ECC)
         actual = tp.locate(image, 21, 1, preprocess=False,
                            engine=self.engine)['ecc']
         expected = ECC
@@ -638,7 +641,7 @@ class CommonFeatureIdentificationTests(object):
 
         ECC = 0.5
         image = np.ones(dims, dtype='uint8')
-        draw_feature(image, pos, 27, ecc=ECC)
+        draw_feature(image, pos, 4.5, ecc=ECC)
         actual = tp.locate(image, 21, 1, preprocess=False,
                            engine=self.engine)['ecc']
         expected = ECC
@@ -658,18 +661,18 @@ class CommonFeatureIdentificationTests(object):
         # Parameters are tweaked so that there is no deviation due to a too
         # small mask size. Signal/noise ratios up to 50% are tested.
         self.check_skip()
-        draw_diameter = 21
+        draw_size = 3.5
         locate_diameter = 15
         N = 200
         shape = (512, 513)
         noise_expectation = np.array([1/2., np.sqrt(1/12.)])  # average, stdev
 
         # Generate feature locations and make the image
-        expected = gen_nonoverlapping_locations(shape, N, draw_diameter,
+        expected = gen_nonoverlapping_locations(shape, N, draw_size*6,
                                                 locate_diameter)
         expected = expected + np.random.random(expected.shape)
         N = expected.shape[0]
-        image = draw_spots(shape, expected, draw_diameter, bitdepth=12)
+        image = draw_spots(shape, expected, draw_size, bitdepth=12)
 
         for n, noise in enumerate([0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.5]):
             noise_level = int((2**12 - 1) * noise)
@@ -704,7 +707,7 @@ class CommonFeatureIdentificationTests(object):
         noise = 0.2
         for ar in [1.1, 1.5, 2]:  # sizeY / sizeX
             image = np.random.randint(0, int(noise*255), dims).astype('uint8')
-            draw_feature(image, pos, [int(SIZE*8*ar), SIZE*8],
+            draw_feature(image, pos, [SIZE*ar, SIZE],
                          max_value=int((1-noise)*255))
             f = tp.locate(image, [int(SIZE*4*ar) * 2 - 1, SIZE*8 - 1],
                           threshold=int(noise*64), topn=1,
@@ -719,7 +722,7 @@ class CommonFeatureIdentificationTests(object):
         expected = np.array([pos])
 
         image = np.ones(dims, dtype='uint8')
-        draw_feature(image, pos, 15)
+        draw_feature(image, pos, 2.5)
 
         guess = np.array([[6, 13]])
         actual = tp.feature.refine(image, image, 6, guess, characterize=False,
@@ -757,8 +760,8 @@ class CommonFeatureIdentificationTests(object):
         # must be less than if it were not there at all (replaced
         # with the average background intensity). So our feature will be a
         # small bright spot surrounded by a dark annulus.
-        draw_feature(image, pos, 6, max_value=-100)
-        draw_feature(image, pos, 4, max_value=200)
+        draw_feature(image, pos, 1, max_value=-100)
+        draw_feature(image, pos, 0.67, max_value=200)
         
         actual = tp.locate(image, 9, 1, preprocess=False, engine=self.engine)
         assert np.allclose(actual[['x', 'y']], expected[['x', 'y']])
