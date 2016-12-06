@@ -10,16 +10,16 @@ import numpy as np
 import pandas as pd
 from scipy import ndimage
 
-from .masks import slice_image, mask_image
-from .find import grey_dilation, drop_close
-from .utils import (default_pos_columns, guess_pos_columns, is_isotropic,
-                    cKDTree, catch_keyboard_interrupt, validate_tuple,
-                    pandas_sort)
-from .preprocessing import bandpass
-from .refine import center_of_mass
+from ..masks import slice_image, mask_image
+from ..find import grey_dilation, drop_close
+from ..utils import (default_pos_columns, guess_pos_columns, is_isotropic,
+                     cKDTree, catch_keyboard_interrupt, validate_tuple,
+                     pandas_sort)
+from ..preprocessing import bandpass
+from ..refine import center_of_mass
 from .linking import (Point, TrackUnstored, TreeFinder, recursive_linker_obj,
                       _points_to_arr)
-from .feature import characterize
+from ..feature import characterize
 
 logger = logging.getLogger(__name__)
 

@@ -12,9 +12,9 @@ from collections import deque
 import numpy as np
 import pandas as pd
 
-from .try_numba import try_numba_autojit, NUMBA_AVAILABLE
-from .utils import (is_pandas_since_016, pandas_sort, cKDTree, validate_tuple,
-                    is_isotropic, default_pos_columns)
+from ..try_numba import try_numba_autojit, NUMBA_AVAILABLE
+from ..utils import (is_pandas_since_016, pandas_sort, cKDTree, validate_tuple,
+                     is_isotropic, default_pos_columns)
 
 logger = logging.getLogger(__name__)
 
@@ -1650,7 +1650,3 @@ def drop_link(source_list, dest_size, search_range, max_size=30, diag=False):
         raise SubnetOversizeException("Subnetwork contains %d points"
                                       % len(source_list))
     return [sp for sp in source_list], [None,] * len(source_list)
-
-
-sub_net_linker = SubnetLinker  # legacy
-Hash_table = HashTable  # legacy

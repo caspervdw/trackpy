@@ -12,23 +12,22 @@ from .static import proximity, pair_correlation_2d, pair_correlation_3d, \
 from .plots import annotate, annotate3d, plot_traj, ptraj, \
            plot_displacements, subpx_bias, mass_size, mass_ecc, \
            scatter, scatter3d, plot_traj3d, ptraj3d, plot_density_profile
-from .linking import HashTable, TreeFinder, Point, PointND, \
-           Track, TrackUnstored, UnknownLinkingError, \
-           SubnetOversizeException, link, link_df, link_iter, \
-           link_df_iter, strip_diagnostics
+from .linking import link, link_df, link_iter, \
+           link_df_iter, find_link, find_link_iter
 from .filtering import filter_stubs, filter_clusters, filter
 from .feature import locate, batch, local_maxima, \
            estimate_mass, estimate_size, minmass_version_change
 from .preprocessing import bandpass
 from .framewise_data import FramewiseData, PandasHDFStore, PandasHDFStoreBig, \
            PandasHDFStoreSingleNode
-from .find_link import link_simple, link_simple_iter, find_link, find_link_iter
+from .linking import link_simple, link_simple_iter, find_link, find_link_iter
 from .refine import refine_com, refine_leastsq
 from . import utils
 from . import artificial
 from .utils import handle_logging, ignore_logging, quiet
 from .try_numba import try_numba_autojit, enable_numba, disable_numba
 
+from .linking import predict
 
 # pims import is deprecated. We include it here for backwards
 # compatibility, but there will be warnings.

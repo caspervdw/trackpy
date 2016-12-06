@@ -7,17 +7,13 @@ import warnings
 
 import numpy as np
 import pandas as pd
-from pandas import DataFrame, Series
+from pandas import DataFrame
 import unittest
 import nose
-from numpy.testing import assert_almost_equal, assert_allclose
-from numpy.testing.decorators import slow
-from pandas.util.testing import (assert_series_equal, assert_frame_equal,
-                                 assert_almost_equal, assert_produces_warning)
-
+from pandas.util.testing import assert_frame_equal
 import trackpy as tp
 from trackpy.try_numba import NUMBA_AVAILABLE
-from trackpy.linking import PointND, Hash_table
+from trackpy.linking import PointND, HashTable, SubnetOversizeException, strip_diagnostics
 from trackpy.utils import is_pandas_since_016, pandas_sort, validate_tuple
 
 # suppress logging messages
@@ -42,7 +38,7 @@ random_walk_legacy = lambda: [[PointND(t, (x, 5))]
 
 
 def hash_generator(dims, box_size):
-    return lambda: Hash_table(dims, box_size)
+    return lambda: HashTable(dims, box_size)
 
 
 def _skip_if_no_numba():
@@ -272,8 +268,7 @@ class CommonTrackingTests(object):
                 level.append(PointND(j, (j, k)))
             levels.append(level)
 
-        hash_generator = lambda: Hash_table((level_count + 1,
-                                            p_count * 2 + 1), .5)
+        hash_generator = lambda: HashTable((level_count + 1, p_count * 2 + 1), .5)
         tracks = self.link(levels, 1.5, hash_generator)
     
         assert len(tracks) == p_count
@@ -324,11 +319,11 @@ class CommonTrackingTests(object):
         assert_frame_equal(actual_iter, expected)
         assert 'particle' not in f.columns
 
-    @nose.tools.raises(tp.SubnetOversizeException)
+    @nose.tools.raises(SubnetOversizeException)
     def test_oversize_fail(self):
         self.link_df(contracting_grid(), 1)
 
-    @nose.tools.raises(tp.SubnetOversizeException)
+    @nose.tools.raises(SubnetOversizeException)
     def test_adaptive_fail(self):
         """Check recursion limit"""
         self.link_df(contracting_grid(), 1, adaptive_stop=0.92)
@@ -617,9 +612,9 @@ class SubnetNeededTests(CommonTrackingTests):
                 level.append(PointND(k // 2, (j, k + j * shift)))
             levels.append(level)
 
-        hash_generator = lambda: Hash_table((level_count + 1,
-                                             p_count*2 + level_count*shift + 1),
-                                            .5)
+        hash_generator = lambda: HashTable((level_count + 1,
+                                            p_count*2 + level_count*shift + 1),
+                                           .5)
         tracks = self.link(levels, 8, hash_generator)
 
         assert len(tracks) == p_count, len(tracks)
@@ -638,7 +633,7 @@ class DiagnosticsTests(CommonTrackingTests):
         """
         diag_cols = [cn for cn in df.columns if cn.startswith('diag_')]
         self.diag = df.reindex(columns=diag_cols)
-        return tp.strip_diagnostics(df)
+        return strip_diagnostics(df)
 
     def link_df(self, *args, **kwargs):
         return self._strip_diag(
